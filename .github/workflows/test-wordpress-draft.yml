@@ -1,17 +1,18 @@
-name: Test WordPress Draft
+name: Sync Threads to WordPress Draft
 
 on:
-  workflow_dispatch: # Mengizinkan eksekusi manual dari tab Actions
+  workflow_dispatch:
 
 jobs:
-  create-draft:
+  sync-threads:
     runs-on: ubuntu-latest
     steps:
-      - name: Create Draft Post in WordPress
+      - name: Fetch Threads and Create WordPress Draft
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
         run: |
           python - <<'PY'
           import urllib.request
@@ -19,46 +20,65 @@ jobs:
           import os
           import base64
 
-          # Mengambil environment variables
           wp_url = os.environ.get('WP_URL', '').strip().rstrip('/')
           wp_username = os.environ.get('WP_USERNAME', '').strip()
           wp_password = os.environ.get('WP_APP_PASSWORD', '').strip()
+          threads_token = os.environ.get('THREADS_ACCESS_TOKEN', '').strip()
 
-          # Validasi apakah WP_URL kosong
-          if not wp_url:
-              print("ERROR: WP_URL kosong! Pastikan Secret WP_URL sudah dibuat di Settings.")
+          # Menggunakan endpoint 'me' agar tidak tergantung THREADS_USER_ID yang rawan salah format
+          threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type&access_token={threads_token}"
+
+          print("Mengambil data dari Threads API...")
+          try:
+              req_threads = urllib.request.Request(threads_api_url)
+              with urllib.request.urlopen(req_threads, timeout=15) as response:
+                  threads_data = json.loads(response.read().decode())
+          except urllib.error.HTTPError as e:
+              print(f"HTTP Error Threads API: {e.code} - {e.reason}")
+              print(f"Detail error dari Meta: {e.read().decode()}")
               exit(1)
-          elif not wp_url.startswith('http'):
-              print(f"ERROR: WP_URL harus diawali https:// (Saat ini: {wp_url})")
+          except Exception as e:
+              print(f"Error mengambil data Threads: {e}")
               exit(1)
 
-          api_url = f"{wp_url}/wp-json/wp/v2/posts"
-          
-          # Membuat token autentikasi
+          posts = threads_data.get('data', [])
+          if not posts:
+              print("Tidak ada utas Threads yang ditemukan di akun ini.")
+              exit(0)
+
+          # Ambil postingan terbaru (index 0)
+          latest_post = posts[0]
+          post_text = latest_post.get('text', 'Utas Tanpa Teks (Gambar/Video)')
+          post_id = latest_post.get('id', '')
+
+          title = (post_text[:50] + '...') if len(post_text) > 50 else post_text
+          content = f"<p>{post_text.replace('\n', '<br>')}</p><br><hr><p><i>Diimpor otomatis dari Utas Threads (ID: {post_id})</i></p>"
+
+          wp_api_url = f"{wp_url}/wp-json/wp/v2/posts"
           credentials = f"{wp_username}:{wp_password}"
-          token = base64.b64encode(credentials.encode()).decode('utf-8')
+          auth_token = base64.b64encode(credentials.encode()).decode('utf-8')
 
           headers = {
-              'Authorization': f'Basic {token}',
+              'Authorization': f'Basic {auth_token}',
               'Content-Type': 'application/json'
           }
 
-          data = {
-              'title': 'Uji Otomatisasi Threads ke WordPress',
-              'content': 'Jika kamu membaca ini, berarti integrasi GitHub Actions ke WordPress telah berhasil!',
+          payload = {
+              'title': f"[Threads] {title}",
+              'content': content,
               'status': 'draft'
           }
 
-          req = urllib.request.Request(api_url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
+          print("Mengirim artikel draf ke WordPress...")
+          req_wp = urllib.request.Request(wp_api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
 
           try:
-              with urllib.request.urlopen(req) as response:
-                  print(f"Sukses! Draft dibuat dengan status HTTP: {response.status}")
+              with urllib.request.urlopen(req_wp, timeout=15) as response:
+                  print(f"Sukses! Draf berhasil dibuat dari Utas Threads. Status: {response.status}")
           except urllib.error.HTTPError as e:
-              print(f"HTTP Error: {e.code} - {e.reason}")
-              print(f"Detail dari WordPress: {e.read().decode()}")
+              print(f"HTTP Error WP: {e.code} - {e.read().decode()}")
               exit(1)
           except Exception as e:
-              print(f"Error sistem: {e}")
+              print(f"Error WP: {e}")
               exit(1)
           PY
