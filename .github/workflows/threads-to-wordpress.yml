@@ -1,0 +1,85 @@
+name: Sync Threads to WordPress Draft
+
+on:
+  workflow_dispatch: # Dapat dijalankan manual dari tab Actions
+
+jobs:
+  sync-threads:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Threads and Create WordPress Draft
+        env:
+          WP_URL: ${{ secrets.WP_URL }}
+          WP_USERNAME: ${{ secrets.WP_USERNAME }}
+          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          THREADS_USER_ID: ${{ secrets.THREADS_USER_ID }}
+          THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+        run: |
+          python - <<'PY'
+          import urllib.request
+          import json
+          import os
+          import base64
+
+          # Environment variables
+          wp_url = os.environ.get('WP_URL', '').strip().rstrip('/')
+          wp_username = os.environ.get('WP_USERNAME', '').strip()
+          wp_password = os.environ.get('WP_APP_PASSWORD', '').strip()
+          threads_user_id = os.environ.get('THREADS_USER_ID', '').strip()
+          threads_token = os.environ.get('THREADS_ACCESS_TOKEN', '').strip()
+
+          # 1. Ambil postingan/utas terbaru dari Threads API
+          threads_api_url = f"https://graph.threads.net/v1.0/{threads_user_id}/threads?fields=id,text,timestamp,media_type&access_token={threads_token}"
+
+          print("Mengambil data dari Threads API...")
+          try:
+              req_threads = urllib.request.Request(threads_api_url)
+              with urllib.request.urlopen(req_threads) as response:
+                  threads_data = json.loads(response.read().decode())
+          except Exception as e:
+              print(f"Error mengambil data Threads: {e}")
+              exit(1)
+
+          posts = threads_data.get('data', [])
+          if not posts:
+              print("Tidak ada utas Threads yang ditemukan.")
+              exit(0)
+
+          # Ambil postingan terbaru (index 0)
+          latest_post = posts[0]
+          post_text = latest_post.get('text', 'Tanpa Teks')
+          post_id = latest_post.get('id', '')
+
+          # Buat judul dari 50 karakter pertama teks Threads
+          title = (post_text[:50] + '...') if len(post_text) > 50 else post_text
+          content = f"<p>{post_text.replace('\n', '<br>')}</p><br><hr><p><i>Diimpor otomatis dari Utas Threads (ID: {post_id})</i></p>"
+
+          # 2. Kirim ke WordPress sebagai Draft
+          wp_api_url = f"{wp_url}/wp-json/wp/v2/posts"
+          credentials = f"{wp_username}:{wp_password}"
+          auth_token = base64.b64encode(credentials.encode()).decode('utf-8')
+
+          headers = {
+              'Authorization': f'Basic {auth_token}',
+              'Content-Type': 'application/json'
+          }
+
+          payload = {
+              'title': f"[Threads] {title}",
+              'content': content,
+              'status': 'draft'
+          }
+
+          print("Mengirim artikel draf ke WordPress...")
+          req_wp = urllib.request.Request(wp_api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
+
+          try:
+              with urllib.request.urlopen(req_wp) as response:
+                  print(f"Sukses! Draf berhasil dibuat dari Utas Threads. Status: {response.status}")
+          except urllib.error.HTTPError as e:
+              print(f"HTTP Error WP: {e.code} - {e.read().decode()}")
+              exit(1)
+          except Exception as e:
+              print(f"Error WP: {e}")
+              exit(1)
+          PY
