@@ -1,57 +1,64 @@
 name: Test WordPress Draft
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Mengizinkan eksekusi manual dari tab Actions
 
 jobs:
   create-draft:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Create a WordPress draft
+      - name: Create Draft Post in WordPress
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
         run: |
           python - <<'PY'
-          import base64
+          import urllib.request
           import json
           import os
-          import urllib.request
-          import urllib.error
+          import base64
 
-          wp_url = os.environ["WP_URL"].rstrip("/")
-          username = os.environ["WP_USERNAME"]
-          app_password = os.environ["WP_APP_PASSWORD"]
+          # Mengambil environment variables
+          wp_url = os.environ.get('WP_URL', '').strip().rstrip('/')
+          wp_username = os.environ.get('WP_USERNAME', '').strip()
+          wp_password = os.environ.get('WP_APP_PASSWORD', '').strip()
 
-          post = {
-              "title": "Uji Otomatisasi Threads",
-              "content": "Ini adalah artikel uji dari GitHub Actions. Jika Anda melihatnya di WordPress, integrasi berhasil.",
-              "status": "draft"
+          # Validasi apakah WP_URL kosong
+          if not wp_url:
+              print("ERROR: WP_URL kosong! Pastikan Secret WP_URL sudah dibuat di Settings.")
+              exit(1)
+          elif not wp_url.startswith('http'):
+              print(f"ERROR: WP_URL harus diawali https:// (Saat ini: {wp_url})")
+              exit(1)
+
+          api_url = f"{wp_url}/wp-json/wp/v2/posts"
+          
+          # Membuat token autentikasi
+          credentials = f"{wp_username}:{wp_password}"
+          token = base64.b64encode(credentials.encode()).decode('utf-8')
+
+          headers = {
+              'Authorization': f'Basic {token}',
+              'Content-Type': 'application/json'
           }
 
-          credentials = f"{username}:{app_password}".encode("utf-8")
-          encoded_credentials = base64.b64encode(credentials).decode("ascii")
+          data = {
+              'title': 'Uji Otomatisasi Threads ke WordPress',
+              'content': 'Jika kamu membaca ini, berarti integrasi GitHub Actions ke WordPress telah berhasil!',
+              'status': 'draft'
+          }
 
-          request = urllib.request.Request(
-              f"{wp_url}/wp-json/wp/v2/posts",
-              data=json.dumps(post).encode("utf-8"),
-              headers={
-                  "Authorization": f"Basic {encoded_credentials}",
-                  "Content-Type": "application/json",
-                  "User-Agent": "github-actions-wordpress-test"
-              },
-              method="POST"
-          )
+          req = urllib.request.Request(api_url, data=json.dumps(data).encode('utf-8'), headers=headers, method='POST')
 
           try:
-              with urllib.request.urlopen(request) as response:
-                  result = json.loads(response.read().decode("utf-8"))
-                  print(f"Draft berhasil dibuat. ID: {result.get('id')}")
-                  print(f"Status: {result.get('status')}")
-          except urllib.error.HTTPError as error:
-              details = error.read().decode("utf-8", errors="replace")
-              print(f"WordPress mengembalikan HTTP {error.code}: {details}")
-              raise
+              with urllib.request.urlopen(req) as response:
+                  print(f"Sukses! Draft dibuat dengan status HTTP: {response.status}")
+          except urllib.error.HTTPError as e:
+              print(f"HTTP Error: {e.code} - {e.reason}")
+              print(f"Detail dari WordPress: {e.read().decode()}")
+              exit(1)
+          except Exception as e:
+              print(f"Error sistem: {e}")
+              exit(1)
           PY
