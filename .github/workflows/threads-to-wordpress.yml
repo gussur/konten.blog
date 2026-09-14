@@ -1,15 +1,15 @@
 name: Sync Threads to WordPress Draft
 
 on:
-  workflow_dispatch: # Tetap pertahankan agar bisa dijalankan manual
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # Otomatis jalan setiap hari jam 07:00 WIB (00:00 UTC)
+    - cron: '0 0 * * *' # Otomatis jalan jam 07:00 WIB tiap hari
 
 jobs:
   sync-threads:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch Threads and Create WordPress Draft
+      - name: Fetch Full Thread Chain and Create WordPress Draft
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
@@ -27,35 +27,58 @@ jobs:
           wp_password = os.environ.get('WP_APP_PASSWORD', '').strip()
           threads_token = os.environ.get('THREADS_ACCESS_TOKEN', '').strip()
 
-          # Menggunakan endpoint 'me' agar tidak tergantung THREADS_USER_ID yang rawan salah format
+          # 1. Ambil postingan induk (root post) terbaru dari Threads
           threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type&access_token={threads_token}"
 
-          print("Mengambil data dari Threads API...")
+          print("Mengambil postingan induk dari Threads API...")
           try:
               req_threads = urllib.request.Request(threads_api_url)
               with urllib.request.urlopen(req_threads, timeout=15) as response:
                   threads_data = json.loads(response.read().decode())
-          except urllib.error.HTTPError as e:
-              print(f"HTTP Error Threads API: {e.code} - {e.reason}")
-              print(f"Detail error dari Meta: {e.read().decode()}")
-              exit(1)
           except Exception as e:
-              print(f"Error mengambil data Threads: {e}")
+              print(f"Error mengambil Threads API: {e}")
               exit(1)
 
           posts = threads_data.get('data', [])
           if not posts:
-              print("Tidak ada utas Threads yang ditemukan di akun ini.")
+              print("Tidak ada utas Threads yang ditemukan.")
               exit(0)
 
-          # Ambil postingan terbaru (index 0)
-          latest_post = posts[0]
-          post_text = latest_post.get('text', 'Utas Tanpa Teks (Gambar/Video)')
-          post_id = latest_post.get('id', '')
+          # Postingan teratas adalah awal dari utas
+          root_post = posts[0]
+          root_id = root_post.get('id', '')
+          root_text = root_post.get('text', '')
 
-          title = (post_text[:50] + '...') if len(post_text) > 50 else post_text
-          content = f"<p>{post_text.replace('\n', '<br>')}</p><br><hr><p><i>Diimpor otomatis dari Utas Threads (ID: {post_id})</i></p>"
+          thread_chain = [root_text]
 
+          # 2. Ambil seluruh rangkaian balasan (replies) dari utas tersebut
+          replies_url = f"https://graph.threads.net/v1.0/{root_id}/replies?fields=id,text,timestamp,username&access_token={threads_token}"
+          print(f"Mengambil rangkaian balasan utas (ID: {root_id})...")
+          
+          try:
+              req_replies = urllib.request.Request(replies_url)
+              with urllib.request.urlopen(req_replies, timeout=15) as response:
+                  replies_data = json.loads(response.read().decode())
+                  replies = replies_data.get('data', [])
+                  
+                  # Urutkan balasan berdasarkan waktu agar alur baca sesuai urutan posting
+                  replies.sort(key=lambda x: x.get('timestamp', ''))
+                  
+                  for reply in replies:
+                      text = reply.get('text', '')
+                      if text:
+                          thread_chain.append(text)
+          except Exception as e:
+              print(f"Catatan: Tidak dapat mengambil balasan ({e}), menggunakan postingan awal saja.")
+
+          # 3. Gabungkan seluruh postingan bersambung jadi satu artikel
+          formatted_paragraphs = [f"<p>{text.replace('\n', '<br>')}</p>" for text in thread_chain if text]
+          combined_content = "".join(formatted_paragraphs)
+          
+          title = (root_text[:50] + '...') if len(root_text) > 50 else root_text
+          full_content = f"{combined_content}<br><hr><p><i>Diimpor otomatis dari Utas Threads bersambung ({len(thread_chain)} bagian) - ID: {root_id}</i></p>"
+
+          # 4. Kirim ke WordPress sebagai Draft
           wp_api_url = f"{wp_url}/wp-json/wp/v2/posts"
           credentials = f"{wp_username}:{wp_password}"
           auth_token = base64.b64encode(credentials.encode()).decode('utf-8')
@@ -67,20 +90,17 @@ jobs:
 
           payload = {
               'title': f"[Threads] {title}",
-              'content': content,
+              'content': full_content,
               'status': 'draft'
           }
 
-          print("Mengirim artikel draf ke WordPress...")
+          print("Mengirim artikel lengkap ke WordPress...")
           req_wp = urllib.request.Request(wp_api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
 
           try:
               with urllib.request.urlopen(req_wp, timeout=15) as response:
-                  print(f"Sukses! Draf berhasil dibuat dari Utas Threads. Status: {response.status}")
-          except urllib.error.HTTPError as e:
-              print(f"HTTP Error WP: {e.code} - {e.read().decode()}")
-              exit(1)
+                  print(f"Sukses! Utas lengkap ({len(thread_chain)} bagian) berhasil dibuat jadi draft. Status: {response.status}")
           except Exception as e:
-              print(f"Error WP: {e}")
+              print(f"Error kirim ke WP: {e}")
               exit(1)
           PY
