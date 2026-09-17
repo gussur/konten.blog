@@ -48,8 +48,8 @@ jobs:
           ig_access_token = os.environ.get('IG_ACCESS_TOKEN', '').strip()
           imgbb_key = os.environ.get('IMGBB_API_KEY', '').strip()
 
-          # Unduh Font Google (Playfair Display & Inter) untuk tampilan profesional
-          print("Mengunduh font tipografi premium...")
+          # Unduh Font Google
+          print("Mengunduh font...")
           font_serif_url = "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf"
           font_sans_url = "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"
 
@@ -97,42 +97,46 @@ jobs:
 
           print(f"Berhasil mengambil {len(thread_chain)} bagian utas Threads.")
 
-          # 2. Desain Slide Carousel Elegan (Light Mode)
+          # 2. Desain Slide Carousel
           slides_text = thread_chain[:10]
           container_ids = []
 
-          # Definisi Font
-          title_font = ImageFont.truetype("font_serif.ttf", 54) # Font Judul Utama Slide 1
-          body_font = ImageFont.truetype("font_sans.ttf", 40)   # Font Isi Pesan
-          header_font = ImageFont.truetype("font_sans.ttf", 26) # Font Header & Counter
+          # Definisi Font Pas
+          title_font = ImageFont.truetype("font_serif.ttf", 46) # Font Cover (Serif)
+          body_font = ImageFont.truetype("font_sans.ttf", 36)   # Font Isi (Sans-Serif Rapat)
+          header_font = ImageFont.truetype("font_sans.ttf", 24)
 
           for idx, text in enumerate(slides_text):
-              # Kanvas latar terang (#FAF8F5)
               img = Image.new('RGB', (1080, 1080), color='#FAF8F5')
               draw = ImageDraw.Draw(img)
 
-              # --- Header ---
+              # Header
               draw.text((90, 80), "gussur.com — Laju Laku Lalu", fill='#555555', font=header_font)
               draw.text((930, 80), f"{idx + 1}/{len(slides_text)}", fill='#777777', font=header_font)
               draw.line([(90, 130), (990, 130)], fill='#E2E0DC', width=2)
 
-              # --- Body Text ---
-              # Slide 1 pakai font Serif tebal, Slide lanjutan pakai Sans-Serif bersih
-              current_font = title_font if idx == 0 else body_font
-              wrap_width = 28 if idx == 0 else 32
+              # Format Teks Rapat & Presisi
+              if idx == 0:
+                  current_font = title_font
+                  line_width = 30
+                  line_spacing = 10
+              else:
+                  current_font = body_font
+                  line_width = 38
+                  line_spacing = 8
 
-              lines = textwrap.wrap(text, width=wrap_width)
-              wrapped_text = "\n\n".join(lines) if idx != 0 else "\n".join(lines)
+              # Wrap paragraf tanpa spasi ganda liar
+              paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
+              wrapped_paragraphs = ["\n".join(textwrap.wrap(p, width=line_width)) for p in paragraphs]
+              final_text = "\n\n".join(wrapped_paragraphs)
 
-              # Posisikan teks di tengah kanvas
-              bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=current_font, align="left")
+              bbox = draw.multiline_textbbox((0, 0), final_text, font=current_font, align="left", spacing=line_spacing)
               text_h = bbox[3] - bbox[1]
               y_pos = (1080 - text_h) / 2
 
-              # Warna Teks Utama (Dark Charcoal)
-              draw.multiline_text((90, max(y_pos, 200)), wrapped_text, fill='#1A1A1A', font=current_font, align="left", spacing=18)
+              draw.multiline_text((90, max(y_pos, 200)), final_text, fill='#1A1A1A', font=current_font, align="left", spacing=line_spacing)
 
-              # --- Footer ---
+              # Footer
               draw.line([(90, 950), (990, 950)], fill='#E2E0DC', width=2)
               draw.text((900, 980), "@gussur", fill='#444444', font=header_font)
 
