@@ -48,6 +48,16 @@ jobs:
           ig_access_token = os.environ.get('IG_ACCESS_TOKEN', '').strip()
           imgbb_key = os.environ.get('IMGBB_API_KEY', '').strip()
 
+          # Unduh Font Google (Playfair Display & Inter) untuk tampilan profesional
+          print("Mengunduh font tipografi premium...")
+          font_serif_url = "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf"
+          font_sans_url = "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"
+
+          with open("font_serif.ttf", "wb") as f:
+              f.write(requests.get(font_serif_url).content)
+          with open("font_sans.ttf", "wb") as f:
+              f.write(requests.get(font_sans_url).content)
+
           # 1. Ambil Utas Threads
           threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type,username&access_token={threads_token}"
           res = requests.get(threads_api_url).json()
@@ -87,32 +97,55 @@ jobs:
 
           print(f"Berhasil mengambil {len(thread_chain)} bagian utas Threads.")
 
-          # 2. Buat & Upload Gambar Slide
+          # 2. Desain Slide Carousel Elegan (Light Mode)
           slides_text = thread_chain[:10]
           container_ids = []
 
+          # Definisi Font
+          title_font = ImageFont.truetype("font_serif.ttf", 54) # Font Judul Utama Slide 1
+          body_font = ImageFont.truetype("font_sans.ttf", 40)   # Font Isi Pesan
+          header_font = ImageFont.truetype("font_sans.ttf", 26) # Font Header & Counter
+
           for idx, text in enumerate(slides_text):
-              img = Image.new('RGB', (1080, 1080), color='#18181b')
+              # Kanvas latar terang (#FAF8F5)
+              img = Image.new('RGB', (1080, 1080), color='#FAF8F5')
               draw = ImageDraw.Draw(img)
-              font = ImageFont.load_default()
 
-              lines = textwrap.wrap(text, width=32)
-              wrapped_text = "\n".join(lines)
+              # --- Header ---
+              draw.text((90, 80), "gussur.com — Laju Laku Lalu", fill='#555555', font=header_font)
+              draw.text((930, 80), f"{idx + 1}/{len(slides_text)}", fill='#777777', font=header_font)
+              draw.line([(90, 130), (990, 130)], fill='#E2E0DC', width=2)
 
-              bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align="center")
-              text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-              draw.multiline_text(((1080 - text_w) / 2, (1080 - text_h) / 2), wrapped_text, fill='#f4f4f5', font=font, align="center")
-              draw.text((950, 1000), f"{idx + 1}/{len(slides_text)}", fill='#a1a1aa', font=font)
+              # --- Body Text ---
+              # Slide 1 pakai font Serif tebal, Slide lanjutan pakai Sans-Serif bersih
+              current_font = title_font if idx == 0 else body_font
+              wrap_width = 28 if idx == 0 else 32
+
+              lines = textwrap.wrap(text, width=wrap_width)
+              wrapped_text = "\n\n".join(lines) if idx != 0 else "\n".join(lines)
+
+              # Posisikan teks di tengah kanvas
+              bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=current_font, align="left")
+              text_h = bbox[3] - bbox[1]
+              y_pos = (1080 - text_h) / 2
+
+              # Warna Teks Utama (Dark Charcoal)
+              draw.multiline_text((90, max(y_pos, 200)), wrapped_text, fill='#1A1A1A', font=current_font, align="left", spacing=18)
+
+              # --- Footer ---
+              draw.line([(90, 950), (990, 950)], fill='#E2E0DC', width=2)
+              draw.text((900, 980), "@gussur", fill='#444444', font=header_font)
 
               filename = f"slide_{idx}.png"
               img.save(filename)
 
+              # Upload ke ImgBB
               with open(filename, "rb") as file:
                   imgbb_res = requests.post("https://api.imgbb.com/1/upload", data={"key": imgbb_key}, files={"image": file}).json()
 
               image_url = imgbb_res.get('data', {}).get('url')
 
-              # Endpoint diubah ke graph.instagram.com untuk membaca token IGAA
+              # Post Container IG
               item_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media"
               item_res = requests.post(
                   item_url,
@@ -126,7 +159,7 @@ jobs:
               else:
                   print(f"Error Item Slide {idx+1}: {item_res}")
 
-          # 3. Gabungkan dan Cek Status Pemrosesan
+          # 3. Gabungkan dan Cek Status Pemrosesan IG
           if container_ids:
               print("Membuat Induk Carousel IG...")
               carousel_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media"
