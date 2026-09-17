@@ -1,45 +1,57 @@
-name: Sync Threads to WordPress Draft
+name: Sync Threads to WP and IG Carousel
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *' # Otomatis jalan jam 07:00 WIB tiap hari
 
 jobs:
-  sync-threads:
+  sync-all:
     runs-on: ubuntu-latest
     steps:
-      - name: Fetch Full Thread Chain and Create WordPress Draft
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install pillow requests
+
+      - name: Run Generator and Publisher
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           THREADS_ACCESS_TOKEN: ${{ secrets.THREADS_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IMGBB_API_KEY: ${{ secrets.IMGBB_API_KEY }}
         run: |
           python - <<'PY'
-          import urllib.request
-          import json
           import os
           import base64
+          import json
+          import requests
+          from PIL import Image, ImageDraw, ImageFont
+          import textwrap
 
+          # 1. Ambil Secrets
           wp_url = os.environ.get('WP_URL', '').strip().rstrip('/')
           wp_username = os.environ.get('WP_USERNAME', '').strip()
           wp_password = os.environ.get('WP_APP_PASSWORD', '').strip()
           threads_token = os.environ.get('THREADS_ACCESS_TOKEN', '').strip()
+          ig_user_id = os.environ.get('IG_USER_ID', '').strip()
+          ig_access_token = os.environ.get('IG_ACCESS_TOKEN', '').strip()
+          imgbb_key = os.environ.get('IMGBB_API_KEY', '').strip()
 
-          # 1. Ambil postingan induk beserta username penulisnya
+          # 2. Ambil Rantai Utas Threads
           threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type,username&access_token={threads_token}"
-
-          print("Mengambil postingan induk dari Threads API...")
-          try:
-              req_threads = urllib.request.Request(threads_api_url)
-              with urllib.request.urlopen(req_threads, timeout=15) as response:
-                  threads_data = json.loads(response.read().decode())
-          except Exception as e:
-              print(f"Error mengambil Threads API: {e}")
-              exit(1)
-
-          posts = threads_data.get('data', [])
+          res = requests.get(threads_api_url).json()
+          posts = res.get('data', [])
           if not posts:
               print("Tidak ada utas Threads yang ditemukan.")
               exit(0)
@@ -52,75 +64,110 @@ jobs:
           thread_chain = [root_text]
           current_id = root_id
 
-          print(f"Menelusuri rantai utas untuk akun: {root_username} (Mulai dari ID: {current_id})")
-
-          # 2. Penelusuran rantai balasan bertingkat (Hanya ambil milik penulis asli)
           if root_username:
               while True:
                   replies_url = f"https://graph.threads.net/v1.0/{current_id}/replies?fields=id,text,timestamp,username&access_token={threads_token}"
-                  try:
-                      req_replies = urllib.request.Request(replies_url)
-                      with urllib.request.urlopen(req_replies, timeout=15) as response:
-                          replies_data = json.loads(response.read().decode())
-                          replies = replies_data.get('data', [])
-                          
-                          if not replies:
-                              break # Tidak ada balasan sama sekali, hentikan loop
-                              
-                          # Urutkan berdasarkan waktu (dari yang paling lama ke baru)
-                          replies.sort(key=lambda x: x.get('timestamp', ''))
-                          
-                          # Cari balasan yang dibuat oleh username kamu sendiri (lanjutan utas)
-                          next_part = None
-                          for reply in replies:
-                              if reply.get('username') == root_username:
-                                  next_part = reply
-                                  break
-                                  
-                          if next_part:
-                              text = next_part.get('text', '')
-                              if text:
-                                  thread_chain.append(text)
-                              
-                              # Ubah ID saat ini menjadi ID balasan untuk mencari tingkat berikutnya
-                              current_id = next_part.get('id') 
-                          else:
-                              break # Balasan yang ada hanya dari orang lain, hentikan loop
-                              
-                  except Exception as e:
-                      print(f"Berhenti menelusuri balasan: {e}")
+                  r_data = requests.get(replies_url).json()
+                  replies = r_data.get('data', [])
+                  if not replies:
+                      break
+                  replies.sort(key=lambda x: x.get('timestamp', ''))
+                  next_part = None
+                  for reply in replies:
+                      if reply.get('username') == root_username:
+                          next_part = reply
+                          break
+                  if next_part:
+                      text = next_part.get('text', '')
+                      if text:
+                          thread_chain.append(text)
+                      current_id = next_part.get('id')
+                  else:
                       break
 
-          # 3. Gabungkan seluruh rantai menjadi satu artikel utuh
+          print(f"Sukses mengambil utas Threads ({len(thread_chain)} bagian).")
+
+          # Batasi Carousel IG maksimal 10 slide
+          slides_text = thread_chain[:10]
+          container_ids = []
+
+          # 3. Ubah Teks Utas Menjadi Gambar & Upload ke ImgBB
+          print("Mulai membuat gambar Slide Carousel...")
+          for idx, text in enumerate(slides_text):
+              img = Image.new('RGB', (1080, 1080), color='#18181b') # Warna latar Gelap/Dark Mode
+              draw = ImageDraw.Draw(img)
+              
+              font = ImageFont.load_default()
+
+              lines = textwrap.wrap(text, width=32)
+              wrapped_text = "\n".join(lines)
+
+              bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align="center")
+              text_w = bbox[2] - bbox[0]
+              text_h = bbox[3] - bbox[1]
+              x = (1080 - text_w) / 2
+              y = (1080 - text_h) / 2
+
+              draw.multiline_text((x, y), wrapped_text, fill='#f4f4f5', font=font, align="center")
+              draw.text((950, 1000), f"{idx + 1}/{len(slides_text)}", fill='#a1a1aa', font=font)
+
+              filename = f"slide_{idx}.png"
+              img.save(filename)
+
+              # Upload Gambar ke ImgBB
+              with open(filename, "rb") as file:
+                  imgbb_res = requests.post(
+                      "https://api.imgbb.com/1/upload",
+                      data={"key": imgbb_key},
+                      files={"image": file}
+                  ).json()
+
+              image_url = imgbb_res.get('data', {}).get('url')
+              print(f"Slide {idx+1} diunggah ke ImgBB: {image_url}")
+
+              # Buat Item Container Instagram
+              item_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media"
+              item_payload = {
+                  'image_url': image_url,
+                  'is_carousel_item': 'true',
+                  'access_token': ig_access_token
+              }
+              item_res = requests.post(item_url, data=item_payload).json()
+              item_id = item_res.get('id')
+              if item_id:
+                  container_ids.append(item_id)
+
+          # 4. Gabungkan dan Publikasikan Carousel ke Instagram
+          if container_ids:
+              print("Menggabungkan Slide menjadi Carousel Instagram...")
+              carousel_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media"
+              caption = f"{root_text}\n\n---\nUtas lengkap dibaca via gussur.com"
+              carousel_payload = {
+                  'media_type': 'CAROUSEL',
+                  'children': ','.join(container_ids),
+                  'caption': caption,
+                  'access_token': ig_access_token
+              }
+              c_res = requests.post(carousel_url, data=carousel_payload).json()
+              creation_id = c_res.get('id')
+
+              if creation_id:
+                  publish_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media_publish"
+                  pub_res = requests.post(publish_url, data={'creation_id': creation_id, 'access_token': ig_access_token}).json()
+                  print(f"Sukses! Carousel berhasil dipublikasikan ke IG! Media ID: {pub_res.get('id')}")
+
+          # 5. Kirim Draf ke WordPress
           formatted_paragraphs = [f"<p>{text.replace('\n', '<br>')}</p>" for text in thread_chain if text]
           combined_content = "".join(formatted_paragraphs)
-          
           title = (root_text[:50] + '...') if len(root_text) > 50 else root_text
-          full_content = f"{combined_content}<br><hr><p><i>Diimpor otomatis dari Utas Threads bersambung ({len(thread_chain)} bagian) - ID: {root_id}</i></p>"
+          full_content = f"{combined_content}<br><hr><p><i>Diimpor otomatis dari Utas Threads ({len(thread_chain)} bagian)</i></p>"
 
-          # 4. Kirim ke WordPress
           wp_api_url = f"{wp_url}/wp-json/wp/v2/posts"
           credentials = f"{wp_username}:{wp_password}"
           auth_token = base64.b64encode(credentials.encode()).decode('utf-8')
+          headers = {'Authorization': f'Basic {auth_token}', 'Content-Type': 'application/json'}
+          payload = {'title': f"[Threads] {title}", 'content': full_content, 'status': 'draft'}
 
-          headers = {
-              'Authorization': f'Basic {auth_token}',
-              'Content-Type': 'application/json'
-          }
-
-          payload = {
-              'title': f"[Threads] {title}",
-              'content': full_content,
-              'status': 'draft'
-          }
-
-          print("Mengirim artikel lengkap ke WordPress...")
-          req_wp = urllib.request.Request(wp_api_url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
-
-          try:
-              with urllib.request.urlopen(req_wp, timeout=15) as response:
-                  print(f"Sukses! Utas lengkap ({len(thread_chain)} bagian) berhasil dibuat jadi draft. Status: {response.status}")
-          except Exception as e:
-              print(f"Error kirim ke WP: {e}")
-              exit(1)
+          requests.post(wp_api_url, json=payload, headers=headers)
+          print("Sukses! Draf artikel berhasil dikirim ke WordPress.")
           PY
