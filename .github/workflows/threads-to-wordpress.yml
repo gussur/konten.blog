@@ -85,7 +85,7 @@ jobs:
                   else:
                       break
 
-          print(f"Mengambil {len(thread_chain)} bagian utas Threads.")
+          print(f"Berhasil mengambil {len(thread_chain)} bagian utas Threads.")
 
           # 2. Buat & Upload Gambar Slide
           slides_text = thread_chain[:10]
@@ -112,45 +112,65 @@ jobs:
 
               image_url = imgbb_res.get('data', {}).get('url')
 
-              # Upload ke Instagram Container
-              item_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media"
-              item_res = requests.post(item_url, data={
-                  'image_url': image_url,
-                  'is_carousel_item': 'true',
-                  'access_token': ig_access_token
-              }).json()
+              # Endpoint diubah ke graph.instagram.com untuk membaca token IGAA
+              item_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media"
+              item_res = requests.post(
+                  item_url,
+                  params={'access_token': ig_access_token},
+                  data={'image_url': image_url, 'is_carousel_item': 'true'}
+              ).json()
               
               item_id = item_res.get('id')
               if item_id:
                   container_ids.append(item_id)
               else:
-                  print(f"Error Container Item Slide {idx+1}: {item_res}")
+                  print(f"Error Item Slide {idx+1}: {item_res}")
 
-          # 3. Gabungkan dan Publikasikan ke Instagram
+          # 3. Gabungkan dan Cek Status Pemrosesan
           if container_ids:
-              print("Membuat Container Carousel IG...")
-              carousel_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media"
-              carousel_res = requests.post(carousel_url, data={
-                  'media_type': 'CAROUSEL',
-                  'children': ','.join(container_ids),
-                  'caption': f"{root_text}\n\n---\nUtas lengkap di gussur.com",
-                  'access_token': ig_access_token
-              }).json()
+              print("Membuat Induk Carousel IG...")
+              carousel_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media"
+              carousel_res = requests.post(
+                  carousel_url,
+                  params={'access_token': ig_access_token},
+                  data={
+                      'media_type': 'CAROUSEL',
+                      'children': ','.join(container_ids),
+                      'caption': f"{root_text}\n\n---\nUtas lengkap di gussur.com"
+                  }
+              ).json()
               
               creation_id = carousel_res.get('id')
               if creation_id:
-                  print("Menunggu 10 detik agar server Instagram selesai memproses gambar...")
-                  time.sleep(10) # Jeda waktu wajib untuk Instagram API
-
-                  publish_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media_publish"
-                  pub_res = requests.post(publish_url, data={'creation_id': creation_id, 'access_token': ig_access_token}).json()
+                  print(f"Induk Carousel dibuat (ID: {creation_id}). Mengecek status siap publish...")
                   
-                  if 'id' in pub_res:
-                      print(f"SUKSES PUBLISH IG! Media ID: {pub_res['id']}")
+                  is_ready = False
+                  for attempt in range(10):
+                      status_url = f"https://graph.instagram.com/v20.0/{creation_id}?fields=status_code&access_token={ig_access_token}"
+                      status_res = requests.get(status_url).json()
+                      status_code = status_res.get('status_code')
+                      print(f"Pengecekan ke-{attempt+1}: status = {status_code}")
+                      
+                      if status_code == 'FINISHED':
+                          is_ready = True
+                          break
+                      elif status_code == 'ERROR':
+                          print(f"Meta membalas status ERROR: {status_res}")
+                          break
+                      time.sleep(5)
+
+                  if is_ready:
+                      publish_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media_publish"
+                      pub_res = requests.post(
+                          publish_url,
+                          params={'access_token': ig_access_token},
+                          data={'creation_id': creation_id}
+                      ).json()
+                      print(f"RESPON PUBLISH IG: {pub_res}")
                   else:
-                      print(f"Gagal Publish IG: {pub_res}")
+                      print("Gambar belum selesai diproses oleh Instagram, gagal publish.")
               else:
-                  print(f"Gagal Buat Carousel Container: {carousel_res}")
+                  print(f"Gagal Buat Induk Carousel: {carousel_res}")
 
           # 4. Kirim ke WordPress
           formatted_paragraphs = ["<p>" + text.replace('\n', '<br>') + "</p>" for text in thread_chain if text]
