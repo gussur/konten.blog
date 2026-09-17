@@ -3,7 +3,7 @@ name: Sync Threads to WP and IG Carousel
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # Otomatis jalan jam 07:00 WIB tiap hari
+    - cron: '0 0 * * *'
 
 jobs:
   sync-all:
@@ -35,11 +35,11 @@ jobs:
           import os
           import base64
           import json
+          import time
           import requests
           from PIL import Image, ImageDraw, ImageFont
           import textwrap
 
-          # 1. Ambil Secrets
           wp_url = os.environ.get('WP_URL', '').strip().rstrip('/')
           wp_username = os.environ.get('WP_USERNAME', '').strip()
           wp_password = os.environ.get('WP_APP_PASSWORD', '').strip()
@@ -48,7 +48,7 @@ jobs:
           ig_access_token = os.environ.get('IG_ACCESS_TOKEN', '').strip()
           imgbb_key = os.environ.get('IMGBB_API_KEY', '').strip()
 
-          # 2. Ambil Rantai Utas Threads
+          # 1. Ambil Utas Threads
           threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type,username&access_token={threads_token}"
           res = requests.get(threads_api_url).json()
           posts = res.get('data', [])
@@ -85,78 +85,74 @@ jobs:
                   else:
                       break
 
-          print(f"Sukses mengambil utas Threads ({len(thread_chain)} bagian).")
+          print(f"Mengambil {len(thread_chain)} bagian utas Threads.")
 
-          # Batasi Carousel IG maksimal 10 slide
+          # 2. Buat & Upload Gambar Slide
           slides_text = thread_chain[:10]
           container_ids = []
 
-          # 3. Ubah Teks Utas Menjadi Gambar & Upload ke ImgBB
-          print("Mulai membuat gambar Slide Carousel...")
           for idx, text in enumerate(slides_text):
-              img = Image.new('RGB', (1080, 1080), color='#18181b') # Latar Gelap/Dark Mode
+              img = Image.new('RGB', (1080, 1080), color='#18181b')
               draw = ImageDraw.Draw(img)
-              
               font = ImageFont.load_default()
 
               lines = textwrap.wrap(text, width=32)
               wrapped_text = "\n".join(lines)
 
               bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align="center")
-              text_w = bbox[2] - bbox[0]
-              text_h = bbox[3] - bbox[1]
-              x = (1080 - text_w) / 2
-              y = (1080 - text_h) / 2
-
-              draw.multiline_text((x, y), wrapped_text, fill='#f4f4f5', font=font, align="center")
+              text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+              draw.multiline_text(((1080 - text_w) / 2, (1080 - text_h) / 2), wrapped_text, fill='#f4f4f5', font=font, align="center")
               draw.text((950, 1000), f"{idx + 1}/{len(slides_text)}", fill='#a1a1aa', font=font)
 
               filename = f"slide_{idx}.png"
               img.save(filename)
 
-              # Upload Gambar ke ImgBB
               with open(filename, "rb") as file:
-                  imgbb_res = requests.post(
-                      "https://api.imgbb.com/1/upload",
-                      data={"key": imgbb_key},
-                      files={"image": file}
-                  ).json()
+                  imgbb_res = requests.post("https://api.imgbb.com/1/upload", data={"key": imgbb_key}, files={"image": file}).json()
 
               image_url = imgbb_res.get('data', {}).get('url')
-              print(f"Slide {idx+1} diunggah ke ImgBB: {image_url}")
 
-              # Buat Item Container Instagram
+              # Upload ke Instagram Container
               item_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media"
-              item_payload = {
+              item_res = requests.post(item_url, data={
                   'image_url': image_url,
                   'is_carousel_item': 'true',
                   'access_token': ig_access_token
-              }
-              item_res = requests.post(item_url, data=item_payload).json()
+              }).json()
+              
               item_id = item_res.get('id')
               if item_id:
                   container_ids.append(item_id)
+              else:
+                  print(f"Error Container Item Slide {idx+1}: {item_res}")
 
-          # 4. Gabungkan dan Publikasikan Carousel ke Instagram
+          # 3. Gabungkan dan Publikasikan ke Instagram
           if container_ids:
-              print("Menggabungkan Slide menjadi Carousel Instagram...")
+              print("Membuat Container Carousel IG...")
               carousel_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media"
-              caption = f"{root_text}\n\n---\nUtas lengkap dibaca via gussur.com"
-              carousel_payload = {
+              carousel_res = requests.post(carousel_url, data={
                   'media_type': 'CAROUSEL',
                   'children': ','.join(container_ids),
-                  'caption': caption,
+                  'caption': f"{root_text}\n\n---\nUtas lengkap di gussur.com",
                   'access_token': ig_access_token
-              }
-              c_res = requests.post(carousel_url, data=carousel_payload).json()
-              creation_id = c_res.get('id')
-
+              }).json()
+              
+              creation_id = carousel_res.get('id')
               if creation_id:
+                  print("Menunggu 10 detik agar server Instagram selesai memproses gambar...")
+                  time.sleep(10) # Jeda waktu wajib untuk Instagram API
+
                   publish_url = f"https://graph.facebook.com/v20.0/{ig_user_id}/media_publish"
                   pub_res = requests.post(publish_url, data={'creation_id': creation_id, 'access_token': ig_access_token}).json()
-                  print(f"Sukses! Carousel berhasil dipublikasikan ke IG! Media ID: {pub_res.get('id')}")
+                  
+                  if 'id' in pub_res:
+                      print(f"SUKSES PUBLISH IG! Media ID: {pub_res['id']}")
+                  else:
+                      print(f"Gagal Publish IG: {pub_res}")
+              else:
+                  print(f"Gagal Buat Carousel Container: {carousel_res}")
 
-          # 5. Kirim Draf ke WordPress (Perbaikan sintaks string di sini)
+          # 4. Kirim ke WordPress
           formatted_paragraphs = ["<p>" + text.replace('\n', '<br>') + "</p>" for text in thread_chain if text]
           combined_content = "".join(formatted_paragraphs)
           title = (root_text[:50] + '...') if len(root_text) > 50 else root_text
@@ -166,8 +162,7 @@ jobs:
           credentials = f"{wp_username}:{wp_password}"
           auth_token = base64.b64encode(credentials.encode()).decode('utf-8')
           headers = {'Authorization': f'Basic {auth_token}', 'Content-Type': 'application/json'}
-          payload = {'title': f"[Threads] {title}", 'content': full_content, 'status': 'draft'}
-
-          requests.post(wp_api_url, json=payload, headers=headers)
-          print("Sukses! Draf artikel berhasil dikirim ke WordPress.")
+          
+          requests.post(wp_api_url, json={'title': f"[Threads] {title}", 'content': full_content, 'status': 'draft'}, headers=headers)
+          print("Sukses kirim ke WordPress.")
           PY
