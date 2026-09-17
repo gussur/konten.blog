@@ -94,7 +94,7 @@ jobs:
           # 3. Ubah Teks Utas Menjadi Gambar & Upload ke ImgBB
           print("Mulai membuat gambar Slide Carousel...")
           for idx, text in enumerate(slides_text):
-              img = Image.new('RGB', (1080, 1080), color='#18181b') # Warna latar Gelap/Dark Mode
+              img = Image.new('RGB', (1080, 1080), color='#18181b') # Latar Gelap/Dark Mode
               draw = ImageDraw.Draw(img)
               
               font = ImageFont.load_default()
@@ -156,8 +156,8 @@ jobs:
                   pub_res = requests.post(publish_url, data={'creation_id': creation_id, 'access_token': ig_access_token}).json()
                   print(f"Sukses! Carousel berhasil dipublikasikan ke IG! Media ID: {pub_res.get('id')}")
 
-          # 5. Kirim Draf ke WordPress
-          formatted_paragraphs = [f"<p>{text.replace('\n', '<br>')}</p>" for text in thread_chain if text]
+          # 5. Kirim Draf ke WordPress (Perbaikan sintaks string di sini)
+          formatted_paragraphs = ["<p>" + text.replace('\n', '<br>') + "</p>" for text in thread_chain if text]
           combined_content = "".join(formatted_paragraphs)
           title = (root_text[:50] + '...') if len(root_text) > 50 else root_text
           full_content = f"{combined_content}<br><hr><p><i>Diimpor otomatis dari Utas Threads ({len(thread_chain)} bagian)</i></p>"
