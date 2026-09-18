@@ -36,8 +36,9 @@ jobs:
           import base64
           import json
           import time
+          import io
           import requests
-          from PIL import Image, ImageDraw, ImageFont
+          from PIL import Image, ImageDraw, ImageFont, ImageEnhance
           import textwrap
 
           wp_url = os.environ.get('WP_URL', '').strip().rstrip('/')
@@ -58,8 +59,8 @@ jobs:
           with open("font_sans.ttf", "wb") as f:
               f.write(requests.get(font_sans_url).content)
 
-          # 1. Ambil Utas Threads
-          threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type,username&access_token={threads_token}"
+          # 1. Ambil Utas Threads (Sertakan field media_url)
+          threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type,media_url,username&access_token={threads_token}"
           res = requests.get(threads_api_url).json()
           posts = res.get('data', [])
           if not posts:
@@ -70,6 +71,7 @@ jobs:
           root_id = root_post.get('id', '')
           root_text = root_post.get('text', '')
           root_username = root_post.get('username', '')
+          root_media_url = root_post.get('media_url') # Deteksi URL foto di Threads pertama
 
           thread_chain = [root_text]
           current_id = root_id
@@ -101,23 +103,52 @@ jobs:
           slides_text = thread_chain[:10]
           container_ids = []
 
-          title_font = ImageFont.truetype("font_serif.ttf", 46)
+          title_font = ImageFont.truetype("font_serif.ttf", 48)
           body_font = ImageFont.truetype("font_sans.ttf", 36)
           header_font = ImageFont.truetype("font_sans.ttf", 24)
 
           for idx, text in enumerate(slides_text):
-              img = Image.new('RGB', (1080, 1080), color='#FAF8F5')
-              draw = ImageDraw.Draw(img)
+              has_photo_cover = (idx == 0 and root_media_url)
+
+              if has_photo_cover:
+                  # Jika slide 1 ada fotonya: Unduh dan potong ke 1080x1080
+                  print("Foto ditemukan di Threads pertama! Membuat Sampul Berfoto...")
+                  img_bytes = requests.get(root_media_url).content
+                  raw_img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+
+                  # Center Crop Square
+                  w, h = raw_img.size
+                  min_dim = min(w, h)
+                  left = (w - min_dim) / 2
+                  top = (h - min_dim) / 2
+                  raw_img = raw_img.crop((left, top, left + min_dim, top + min_dim))
+                  img = raw_img.resize((1080, 1080))
+
+                  # Tambahkan lapisan gelap transparan agar teks putih terlihat kontras
+                  overlay = Image.new('RGBA', (1080, 1080), (0, 0, 0, 140)) # 55% Black Overlay
+                  img.paste(overlay, (0, 0), overlay)
+                  draw = ImageDraw.Draw(img)
+
+                  text_color = '#FFFFFF'
+                  sub_color = '#E0E0E0'
+                  line_color = 'rgba(255,255,255,0.4)'
+              else:
+                  # Templat Latar Terang (Default)
+                  img = Image.new('RGB', (1080, 1080), color='#FAF8F5')
+                  draw = ImageDraw.Draw(img)
+                  text_color = '#1A1A1A'
+                  sub_color = '#555555'
+                  line_color = '#E2E0DC'
 
               # Header
-              draw.text((90, 80), "gussur.com — Laju Laku Lalu", fill='#555555', font=header_font)
-              draw.text((930, 80), f"{idx + 1}/{len(slides_text)}", fill='#777777', font=header_font)
-              draw.line([(90, 130), (990, 130)], fill='#E2E0DC', width=2)
+              draw.text((90, 80), "gussur.com — Laju Laku Lalu", fill=sub_color, font=header_font)
+              draw.text((930, 80), f"{idx + 1}/{len(slides_text)}", fill=sub_color, font=header_font)
+              draw.line([(90, 130), (990, 130)], fill=line_color, width=2)
 
               if idx == 0:
                   current_font = title_font
-                  line_width = 30
-                  line_spacing = 10
+                  line_width = 28
+                  line_spacing = 12
               else:
                   current_font = body_font
                   line_width = 38
@@ -131,13 +162,13 @@ jobs:
               text_h = bbox[3] - bbox[1]
               y_pos = (1080 - text_h) / 2
 
-              draw.multiline_text((90, max(y_pos, 200)), final_text, fill='#1A1A1A', font=current_font, align="left", spacing=line_spacing)
+              draw.multiline_text((90, max(y_pos, 220)), final_text, fill=text_color, font=current_font, align="left", spacing=line_spacing)
 
               # Footer
-              draw.line([(90, 950), (990, 950)], fill='#E2E0DC', width=2)
-              draw.text((900, 980), "@gussur", fill='#444444', font=header_font)
+              draw.line([(90, 950), (990, 950)], fill=line_color, width=2)
+              draw.text((900, 980), "@gussur", fill=sub_color, font=header_font)
 
-              # Gambar disimpan sebagai JPG murni
+              # Simpan JPG
               filename = f"slide_{idx}.jpg"
               img.save(filename, "JPEG", quality=95)
 
