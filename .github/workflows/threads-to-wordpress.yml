@@ -3,7 +3,7 @@ name: Sync Threads to WP and IG Carousel
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *' # Otomatis mengecek dan memposting setiap 1 jam sekali
+    - cron: '0 * * * *'
 
 jobs:
   sync-all:
@@ -101,9 +101,8 @@ jobs:
           slides_text = thread_chain[:10]
           container_ids = []
 
-          # Definisi Font Pas
-          title_font = ImageFont.truetype("font_serif.ttf", 46) # Font Cover (Serif)
-          body_font = ImageFont.truetype("font_sans.ttf", 36)   # Font Isi (Sans-Serif Rapat)
+          title_font = ImageFont.truetype("font_serif.ttf", 46)
+          body_font = ImageFont.truetype("font_sans.ttf", 36)
           header_font = ImageFont.truetype("font_sans.ttf", 24)
 
           for idx, text in enumerate(slides_text):
@@ -115,7 +114,6 @@ jobs:
               draw.text((930, 80), f"{idx + 1}/{len(slides_text)}", fill='#777777', font=header_font)
               draw.line([(90, 130), (990, 130)], fill='#E2E0DC', width=2)
 
-              # Format Teks Rapat & Presisi
               if idx == 0:
                   current_font = title_font
                   line_width = 30
@@ -125,7 +123,6 @@ jobs:
                   line_width = 38
                   line_spacing = 8
 
-              # Wrap paragraf tanpa spasi ganda liar
               paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
               wrapped_paragraphs = ["\n".join(textwrap.wrap(p, width=line_width)) for p in paragraphs]
               final_text = "\n\n".join(wrapped_paragraphs)
@@ -140,14 +137,16 @@ jobs:
               draw.line([(90, 950), (990, 950)], fill='#E2E0DC', width=2)
               draw.text((900, 980), "@gussur", fill='#444444', font=header_font)
 
-              filename = f"slide_{idx}.png"
-              img.save(filename)
+              # Gambar disimpan sebagai JPG murni
+              filename = f"slide_{idx}.jpg"
+              img.save(filename, "JPEG", quality=95)
 
               # Upload ke ImgBB
               with open(filename, "rb") as file:
                   imgbb_res = requests.post("https://api.imgbb.com/1/upload", data={"key": imgbb_key}, files={"image": file}).json()
 
-              image_url = imgbb_res.get('data', {}).get('url')
+              data_obj = imgbb_res.get('data', {})
+              image_url = data_obj.get('display_url') or data_obj.get('url')
 
               # Post Container IG
               item_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media"
