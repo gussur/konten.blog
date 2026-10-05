@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: '0 * * * *'
 
+permissions:
+  contents: write # Izin agar GitHub Actions bisa menyimpan file last_thread_id.txt
+
 jobs:
   sync-all:
     runs-on: ubuntu-latest
@@ -49,17 +52,13 @@ jobs:
           ig_access_token = os.environ.get('IG_ACCESS_TOKEN', '').strip()
           imgbb_key = os.environ.get('IMGBB_API_KEY', '').strip()
 
-          # Unduh Font Google
-          print("Mengunduh font...")
-          font_serif_url = "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf"
-          font_sans_url = "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"
+          LAST_ID_FILE = "last_thread_id.txt"
+          last_processed_id = ""
+          if os.path.exists(LAST_ID_FILE):
+              with open(LAST_ID_FILE, "r") as f:
+                  last_processed_id = f.read().strip()
 
-          with open("font_serif.ttf", "wb") as f:
-              f.write(requests.get(font_serif_url).content)
-          with open("font_sans.ttf", "wb") as f:
-              f.write(requests.get(font_sans_url).content)
-
-          # 1. Ambil Utas Threads (Sertakan media_url)
+          # 1. Ambil Utas Threads
           threads_api_url = f"https://graph.threads.net/v1.0/me/threads?fields=id,text,timestamp,media_type,media_url,username&access_token={threads_token}"
           res = requests.get(threads_api_url).json()
           posts = res.get('data', [])
@@ -72,6 +71,13 @@ jobs:
           root_text = root_post.get('text', '')
           root_username = root_post.get('username', '')
           root_media_url = root_post.get('media_url')
+
+          # Cek apakah postingan ini sudah pernah diproses sebelumnya
+          if root_id and root_id == last_processed_id:
+              print(f"Utas Threads terbaru (ID: {root_id}) sudah pernah diproses sebelumnya. Menghentikan sinkronisasi agar tidak duplikat.")
+              exit(0)
+
+          print(f"Utas Threads BARU ditemukan (ID: {root_id}). Memulai otomatisasi...")
 
           thread_chain = [root_text]
           current_id = root_id
@@ -99,6 +105,16 @@ jobs:
 
           print(f"Berhasil mengambil {len(thread_chain)} bagian utas Threads.")
 
+          # Unduh Font Google
+          print("Mengunduh font...")
+          font_serif_url = "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf"
+          font_sans_url = "https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf"
+
+          with open("font_serif.ttf", "wb") as f:
+              f.write(requests.get(font_serif_url).content)
+          with open("font_sans.ttf", "wb") as f:
+              f.write(requests.get(font_sans_url).content)
+
           # 2. Desain Slide Carousel
           slides_text = thread_chain[:10]
           container_ids = []
@@ -115,7 +131,6 @@ jobs:
                   img_bytes = requests.get(root_media_url).content
                   raw_img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
 
-                  # Crop Square 1080x1080
                   w, h = raw_img.size
                   min_dim = min(w, h)
                   left = (w - min_dim) / 2
@@ -123,14 +138,13 @@ jobs:
                   raw_img = raw_img.crop((left, top, left + min_dim, top + min_dim))
                   img = raw_img.resize((1080, 1080))
 
-                  # Overlay Gelap Transparan
                   overlay = Image.new('RGBA', (1080, 1080), (0, 0, 0, 140))
                   img.paste(overlay, (0, 0), overlay)
                   draw = ImageDraw.Draw(img)
 
                   text_color = '#FFFFFF'
                   sub_color = '#E0E0E0'
-                  line_color = '#888888' # Perbaikan warna garis baku
+                  line_color = '#888888'
               else:
                   img = Image.new('RGB', (1080, 1080), color='#FAF8F5')
                   draw = ImageDraw.Draw(img)
@@ -166,18 +180,15 @@ jobs:
               draw.line([(90, 950), (990, 950)], fill=line_color, width=2)
               draw.text((900, 980), "@gussur", fill=sub_color, font=header_font)
 
-              # Simpan JPG
               filename = f"slide_{idx}.jpg"
               img.save(filename, "JPEG", quality=95)
 
-              # Upload ke ImgBB
               with open(filename, "rb") as file:
                   imgbb_res = requests.post("https://api.imgbb.com/1/upload", data={"key": imgbb_key}, files={"image": file}).json()
 
               data_obj = imgbb_res.get('data', {})
               image_url = data_obj.get('display_url') or data_obj.get('url')
 
-              # Post Container IG
               item_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media"
               item_res = requests.post(
                   item_url,
@@ -191,7 +202,7 @@ jobs:
               else:
                   print(f"Error Item Slide {idx+1}: {item_res}")
 
-          # 3. Gabungkan dan Cek Status Pemrosesan IG
+          # 3. Gabungkan dan Publikasikan ke IG
           if container_ids:
               print("Membuat Induk Carousel IG...")
               carousel_url = f"https://graph.instagram.com/v20.0/{ig_user_id}/media"
@@ -250,4 +261,15 @@ jobs:
           
           requests.post(wp_api_url, json={'title': f"[Threads] {title}", 'content': full_content, 'status': 'draft'}, headers=headers)
           print("Sukses kirim ke WordPress.")
+
+          # 5. Simpan ID Threads terbaru ke file lokal
+          with open(LAST_ID_FILE, "w") as f:
+              f.write(root_id)
           PY
+
+      - name: Commit Last Processed ID
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add last_thread_id.txt
+          git diff --staged --quiet || (git commit -m "chore: update last processed thread ID" && git push)
